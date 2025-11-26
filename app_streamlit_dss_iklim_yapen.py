@@ -69,38 +69,25 @@ def compute_weather_index(df):
     return 0.35*r_norm + 0.25*t_norm + 0.2*h_norm + 0.2*w_norm
 
 
-# ---------- LOAD DATA ----------
-def load_data():
-    """Membaca data Excel asli TANPA error missing column."""
 
-    data_path = "data_yapen.xlsx"   # <= nama file sesuai file kamu
+# === EXPORT EXCEL TANPA ERROR ===
+import pandas as pd
+import streamlit as st
+from io import BytesIO
 
-    try:
-        df = pd.read_excel(data_path, engine="openpyxl")
-    except Exception as e:
-        st.error(f"❌ File Excel tidak dapat dibaca. Kesalahan: {e}")
-        st.stop()
+def export_excel(df):
+    buffer = BytesIO()
 
-    # Normalisasi nama kolom (biar tidak sensitif kapital)
-    df.columns = df.columns.str.strip().str.lower()
+    # Gunakan engine default (openpyxl). Aman dan tidak butuh instal library tambahan.
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Data_Iklim")
 
-    # Sesuaikan kolom angin
-    if "kecepatan_angin" in df.columns:
-        df["kecepatan_angin"] = df["kecepatan_angin"]
-    elif "kecepatan_angin " in df.columns:
-        df["kecepatan_angin"] = df["kecepatan_angin "]
-    elif "kecepatan_angin.1" in df.columns:
-        df["kecepatan_angin"] = df["kecepatan_angin.1"]
-    elif "kecepatan angin" in df.columns:
-        df["kecepatan_angin"] = df["kecepatan angin"]
-    elif "kecepatan_angin" not in df.columns:
-        df["kecepatan_angin"] = 0   # fallback aman
-
-    # Convert tanggal
-    if "tanggal" in df.columns:
-        df["tanggal"] = pd.to_datetime(df["tanggal"], errors="coerce")
-
-    return df
+    st.download_button(
+        label="⬇️ Download Data dalam Excel",
+        data=buffer.getvalue(),
+        file_name="data_iklim.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 
 # ---------- SIDEBAR ----------
@@ -182,6 +169,7 @@ with st.expander("📁 Unduh Data"):
     )
 
 st.success("Dashboard siap digunakan dengan file data_yapen.xlsx ✔")
+
 
 
 

@@ -4,4 +4,6 @@ numpy
 plotly
 openpyxl
 xlsxwriter
+xlsxwriter
+
 

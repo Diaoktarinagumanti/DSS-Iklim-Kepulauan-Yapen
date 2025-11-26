@@ -1,180 +1,149 @@
-# app_streamlit_dss_iklim_yapen.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
+import altair as alt
 
-# ---------- CONFIG ----------
-st.set_page_config(page_title="DSS Iklim - Kepulauan Yapen", layout="wide")
-st.title("🌦️ Decision Support System Iklim — Kepulauan Yapen")
-st.markdown("Dashboard prediksi & analisis iklim menggunakan file **data_yapen.xlsx**.")
+# ===========================================
+# KONFIGURASI AWAL
+# ===========================================
+st.set_page_config(page_title="Dashboard Cuaca Yapen", layout="wide")
 
-LOCAL_XLSX_PATH = "data_yapen.xlsx"
+LOCAL_PATH = "/mnt/data/KYAPEN.xlsx"
 
+# ===========================================
+# FUNGSI MEMUAT DATA
+# ===========================================
+@st.cache_data
+def load_data(path=LOCAL_PATH):
+    try:
+        df = pd.read_excel(path)
 
-# ---------- DSS FUNCTIONS ----------
-def klasifikasi_cuaca(ch, matahari):
-    if ch > 20:
-        return "Hujan"
-    elif ch > 5:
-        return "Berawan"
-    elif matahari > 4:
-        return "Cerah"
-    else:
-        return "Berawan"
+        # Pastikan kolom tanggal terbaca
+        df['Tanggal'] = pd.to_datetime(df['Tanggal'], errors='coerce')
 
+        # Gabungkan jika ada 2 kolom kecepatan angin
+        if 'Kecepatan_angin' in df.columns and 'kecepatan_angin' in df.columns:
+            df['kecepatan_angin'] = df['Kecepatan_angin'].fillna(df['kecepatan_angin'])
+        elif 'Kecepatan_angin' in df.columns:
+            df.rename(columns={'Kecepatan_angin': 'kecepatan_angin'}, inplace=True)
 
-def risiko_kekeringan_score(ch, matahari):
-    ch = np.clip(ch, 0, 200)
-    matahari = np.clip(matahari, 0, 12)
-    score = (1 - ch/200) * 0.7 + (matahari/12) * 0.3
-    return float(np.clip(score, 0, 1))
+        # Jika kolom yang dibutuhkan tidak ada → isi default
+        required_cols = ['Tn', 'Tx', 'Tavg', 'kelembaban', 'curah_hujan', 'matahari', 'kecepatan_angin']
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = 0
 
+        # Bersihkan data numeric
+        for col in required_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-def risiko_kekeringan_label(score, thresholds=(0.6, 0.3)):
-    high, med = thresholds
-    if score >= high:
-        return "Risiko Tinggi"
-    elif score >= med:
-        return "Risiko Sedang"
-    else:
-        return "Risiko Rendah"
+        df = df.sort_values("Tanggal").reset_index(drop=True)
+        return df
 
+    except Exception as e:
+        st.error(f"Gagal memuat file Excel: {e}")
+        return pd.DataFrame()
 
-def hujan_ekstrem_flag(ch, threshold=50):
-    return int(ch > threshold)
+# ===========================================
+# LOAD DATA
+# ===========================================
+df = load_data()
 
+st.title("📊 Dashboard Data Cuaca - Kabupaten Yapen")
 
-def compute_weather_index(df):
-    eps = 1e-6
-    r = df["curah_hujan"].values
-    r_norm = (r - r.min()) / (r.max() - r.min() + eps)
+if df.empty:
+    st.stop()
 
-    t = df["Tavg"].values
-    comfy_low, comfy_high = 24, 28
-    t_dist = np.maximum(0, np.maximum(comfy_low - t, t - comfy_high))
-    t_norm = (t_dist - t_dist.min()) / (t_dist.max() - t_dist.min() + eps)
+# ===========================================
+# SIDEBAR FILTER
+# ===========================================
+st.sidebar.header("Filter Data")
 
-    h = df["kelembaban"].values
-    hum_dist = np.maximum(0, np.maximum(40 - h, h - 70))
-    h_norm = (hum_dist - hum_dist.min()) / (hum_dist.max() - hum_dist.min() + eps)
+tahun_list = sorted(df['Tanggal'].dt.year.dropna().unique())
+tahun = st.sidebar.selectbox("Pilih Tahun", tahun_list)
 
-    w = df["kecepatan_angin"].values
-    w_norm = (w - w.min()) / (w.max() - w.min() + eps)
+df_filtered = df[df['Tanggal'].dt.year == tahun]
 
-    return 0.35*r_norm + 0.25*t_norm + 0.2*h_norm + 0.2*w_norm
+# ===========================================
+# METRIC RINGKASAN
+# ===========================================
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Rata-rata Suhu (°C)", f"{df_filtered['Tavg'].mean():.2f}")
+col2.metric("Total Curah Hujan (mm)", f"{df_filtered['curah_hujan'].sum():.1f}")
+col3.metric("Rata-rata Kelembaban (%)", f"{df_filtered['kelembaban'].mean():.1f}")
+col4.metric("Rata-rata Kecepatan Angin", f"{df_filtered['kecepatan_angin'].mean():.1f}")
 
+# ===========================================
+# GRAFIK SUHU
+# ===========================================
+st.subheader("📈 Grafik Suhu Harian")
 
-
-# === EXPORT EXCEL TANPA ERROR ===
-import pandas as pd
-import streamlit as st
-from io import BytesIO
-
-def export_excel(df):
-    buffer = BytesIO()
-
-    # Gunakan engine default (openpyxl). Aman dan tidak butuh instal library tambahan.
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Data_Iklim")
-
-    st.download_button(
-        label="⬇️ Download Data dalam Excel",
-        data=buffer.getvalue(),
-        file_name="data_iklim.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+chart_temp = (
+    alt.Chart(df_filtered)
+    .mark_line()
+    .encode(
+        x="Tanggal:T",
+        y=alt.Y("Tavg:Q", title="Suhu (°C)"),
+        tooltip=["Tanggal", "Tn", "Tx", "Tavg"]
     )
+    .properties(height=300)
+)
 
+st.altair_chart(chart_temp, use_container_width=True)
 
-# ---------- SIDEBAR ----------
-st.sidebar.header("⚙️ Pengaturan")
-extreme_threshold = st.sidebar.number_input("Ambang Hujan Ekstrem (mm)", value=50, min_value=1)
-risk_high = st.sidebar.slider("Ambang Risiko Tinggi", 0.0, 1.0, 0.6, 0.01)
-risk_med = st.sidebar.slider("Ambang Risiko Sedang", 0.0, 1.0, 0.3, 0.01)
-ma_window = st.sidebar.slider("Moving Average (hari)", 1, 60, 7)
+# ===========================================
+# GRAFIK CURAH HUJAN
+# ===========================================
+st.subheader("🌧 Curah Hujan Harian")
 
-# Filter tanggal
-st.sidebar.header("📅 Filter Data")
-min_date = data["tanggal"].min().date()
-max_date = data["tanggal"].max().date()
-date_range = st.sidebar.date_input("Rentang Tanggal", (min_date, max_date))
-
-start, end = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
-df = data[(data["tanggal"] >= start) & (data["tanggal"] <= end)].copy()
-
-
-# ---------- FEATURE ENGINEERING ----------
-df["prediksi_cuaca"] = df.apply(lambda r: klasifikasi_cuaca(r["curah_hujan"], r["matahari"]), axis=1)
-df["hujan_ekstrem"] = df["curah_hujan"].apply(lambda x: "Ya" if x > extreme_threshold else "Tidak")
-df["extreme_flag"] = df["curah_hujan"].apply(lambda x: hujan_ekstrem_flag(x, extreme_threshold))
-df["risk_score"] = df.apply(lambda r: risiko_kekeringan_score(r["curah_hujan"], r["matahari"]), axis=1)
-df["risk_label"] = df["risk_score"].apply(lambda s: risiko_kekeringan_label(s, (risk_high, risk_med)))
-df["weather_index"] = compute_weather_index(df)
-df["year"] = df["tanggal"].dt.year
-df["month"] = df["tanggal"].dt.month
-
-
-# ---------- DASHBOARD ----------
-st.markdown("---")
-st.subheader("Ringkasan Data")
-c1, c2, c3 = st.columns(3)
-c1.metric("Avg Rainfall", f"{df['curah_hujan'].mean():.2f} mm")
-c2.metric("Avg Temperature", f"{df['tavg'].mean():.2f} °C")
-c3.metric("Avg Risk Score", f"{df['risk_score'].mean():.2f}")
-
-# ========== 1. CURAH HUJAN ==========
-st.header("1. Prediksi Curah Hujan")
-fig_rain = px.line(df, x="tanggal", y="curah_hujan")
-st.plotly_chart(fig_rain, use_container_width=True)
-
-# ========== 2. TEMPERATURE ==========
-st.header("2. Temperatur")
-fig_temp = px.line(df, x="tanggal", y=["tn", "tavg", "tx"])
-st.plotly_chart(fig_temp, use_container_width=True)
-
-# ========== 3. RISIKO KEKERINGAN ==========
-st.header("3. Risiko Kekeringan")
-df["risk_ma"] = df["risk_score"].rolling(ma_window).mean()
-fig_risk = px.line(df, x="tanggal", y="risk_score")
-fig_risk.add_scatter(x=df["tanggal"], y=df["risk_ma"], mode="lines", name="Moving Average")
-st.plotly_chart(fig_risk, use_container_width=True)
-
-# ========== 4. HUJAN EKSTREM ==========
-st.header("4. Hujan Ekstrem")
-fig_extreme = px.scatter(df, x="tanggal", y="curah_hujan", color="hujan_ekstrem")
-st.plotly_chart(fig_extreme, use_container_width=True)
-
-# ========== 5. WEATHER INDEX ==========
-st.header("5. Weather Index")
-fig_index = px.line(df, x="tanggal", y="weather_index")
-st.plotly_chart(fig_index, use_container_width=True)
-
-# ========== EXPORT ==========
-st.markdown("---")
-with st.expander("📁 Unduh Data"):
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False)
-
-    buffer.seek(0)
-    st.download_button(
-        "Unduh Excel",
-        buffer.getvalue(),
-        "hasil_dss_iklim.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+chart_hujan = (
+    alt.Chart(df_filtered)
+    .mark_bar()
+    .encode(
+        x="Tanggal:T",
+        y=alt.Y("curah_hujan:Q", title="Curah Hujan (mm)"),
+        tooltip=["Tanggal", "curah_hujan"]
     )
+    .properties(height=300)
+)
 
-st.success("Dashboard siap digunakan dengan file data_yapen.xlsx ✔")
+st.altair_chart(chart_hujan, use_container_width=True)
 
+# ===========================================
+# GRAFIK KELEMBABAN & MATAHARI
+# ===========================================
+st.subheader("🌤 Kelembaban & Lama Penyinaran Matahari")
 
+colA, colB = st.columns(2)
 
+with colA:
+    chart_humidity = (
+        alt.Chart(df_filtered)
+        .mark_line()
+        .encode(
+            x="Tanggal:T",
+            y=alt.Y("kelembaban:Q", title="Kelembaban (%)"),
+            tooltip=["Tanggal", "kelembaban"]
+        )
+        .properties(height=300)
+    )
+    st.altair_chart(chart_humidity, use_container_width=True)
 
+with colB:
+    chart_matahari = (
+        alt.Chart(df_filtered)
+        .mark_line()
+        .encode(
+            x="Tanggal:T",
+            y=alt.Y("matahari:Q", title="Jam Matahari"),
+            tooltip=["Tanggal", "matahari"]
+        )
+        .properties(height=300)
+    )
+    st.altair_chart(chart_matahari, use_container_width=True)
 
-
-
-
-
+# ===========================================
+# DATAFRAME
+# ===========================================
+st.subheader("📋 Data Lengkap")
+st.dataframe(df_filtered, use_container_width=True)

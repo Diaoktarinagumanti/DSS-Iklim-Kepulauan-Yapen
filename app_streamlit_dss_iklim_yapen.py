@@ -70,43 +70,37 @@ def compute_weather_index(df):
 
 
 # ---------- LOAD DATA ----------
-@st.cache_data
-def load_data(path):
-    df = pd.read_excel(path, engine="openpyxl")
+def load_data():
+    """Membaca data Excel asli TANPA error missing column."""
 
-    # Normalisasi nama kolom
+    data_path = "data_yapen.xlsx"   # <= nama file sesuai file kamu
+
+    try:
+        df = pd.read_excel(data_path, engine="openpyxl")
+    except Exception as e:
+        st.error(f"❌ File Excel tidak dapat dibaca. Kesalahan: {e}")
+        st.stop()
+
+    # Normalisasi nama kolom (biar tidak sensitif kapital)
     df.columns = df.columns.str.strip().str.lower()
 
-    # Alias untuk kompatibilitas
-    if "kecepatan_angin" not in df.columns:
-        if "kecepatan_angin" in df.columns:
-            df.rename(columns={"Kecepatan_angin": "kecepatan_angin"}, inplace=True)
+    # Sesuaikan kolom angin
+    if "kecepatan_angin" in df.columns:
+        df["kecepatan_angin"] = df["kecepatan_angin"]
+    elif "kecepatan_angin " in df.columns:
+        df["kecepatan_angin"] = df["kecepatan_angin "]
+    elif "kecepatan_angin.1" in df.columns:
+        df["kecepatan_angin"] = df["kecepatan_angin.1"]
+    elif "kecepatan angin" in df.columns:
+        df["kecepatan_angin"] = df["kecepatan angin"]
+    elif "kecepatan_angin" not in df.columns:
+        df["kecepatan_angin"] = 0   # fallback aman
 
-    required_cols = [
-        "tanggal", "tn", "tx", "tavg",
-        "kelembaban", "curah_hujan",
-        "matahari", "kecepatan_angin"
-    ]
+    # Convert tanggal
+    if "tanggal" in df.columns:
+        df["tanggal"] = pd.to_datetime(df["tanggal"], errors="coerce")
 
-    for col in required_cols:
-        if col not in df.columns:
-            st.error(f"❌ Kolom '{col}' tidak ditemukan di Excel!")
-            st.stop()
-
-    df["tanggal"] = pd.to_datetime(df["tanggal"], errors="coerce")
-    for col in ["tn", "tx", "tavg", "kelembaban", "curah_hujan", "matahari", "kecepatan_angin"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-    return df.sort_values("tanggal").reset_index(drop=True)
-
-
-# Load user excel file
-try:
-    data = load_data(LOCAL_XLSX_PATH)
-    st.sidebar.success("✔ Data Excel berhasil dimuat!")
-except Exception as e:
-    st.error(f"❌ Gagal membaca Excel: {e}")
-    st.stop()
+    return df
 
 
 # ---------- SIDEBAR ----------
@@ -188,6 +182,7 @@ with st.expander("📁 Unduh Data"):
     )
 
 st.success("Dashboard siap digunakan dengan file data_yapen.xlsx ✔")
+
 
 
 

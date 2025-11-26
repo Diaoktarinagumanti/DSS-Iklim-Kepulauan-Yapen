@@ -1,4 +1,5 @@
 # app_streamlit_dss_iklim_yapen.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,19 +8,15 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
+# ---------- CONFIG ----------
 st.set_page_config(page_title="DSS Iklim - Kepulauan Yapen", layout="wide")
 st.title("🌦️ Decision Support System Iklim — Kepulauan Yapen")
-st.markdown(
-    "**Data memakai file Excel asli: `data_yapen.xlsx`**. "
-    "Pastikan file ini berada di folder yang sama dengan aplikasi."
-)
+st.markdown("Dashboard prediksi & analisis iklim menggunakan file **data_yapen.xlsx**.")
 
-LOCAL_XLSX_PATH = "data_yapen.xlsx"   # <- FILE ASLI KAMU
+LOCAL_XLSX_PATH = "data_yapen.xlsx"
 
-# ======================================================================
-#  DSS Helper Functions
-# ======================================================================
 
+# ---------- DSS FUNCTIONS ----------
 def klasifikasi_cuaca(ch, matahari):
     if ch > 20:
         return "Hujan"
@@ -32,9 +29,9 @@ def klasifikasi_cuaca(ch, matahari):
 
 
 def risiko_kekeringan_score(ch, matahari):
-    ch_clamped = np.clip(ch, 0, 200)
-    matahari_clamped = np.clip(matahari, 0, 16)
-    score = (1 - (ch_clamped / 200)) * 0.7 + (matahari_clamped / 16) * 0.3
+    ch = np.clip(ch, 0, 200)
+    matahari = np.clip(matahari, 0, 12)
+    score = (1 - ch/200) * 0.7 + (matahari/12) * 0.3
     return float(np.clip(score, 0, 1))
 
 
@@ -54,128 +51,143 @@ def hujan_ekstrem_flag(ch, threshold=50):
 
 def compute_weather_index(df):
     eps = 1e-6
-    r = df['curah_hujan'].astype(float).values
+    r = df["curah_hujan"].values
     r_norm = (r - r.min()) / (r.max() - r.min() + eps)
 
-    t = df['Tavg'].astype(float).values
+    t = df["Tavg"].values
     comfy_low, comfy_high = 24, 28
     t_dist = np.maximum(0, np.maximum(comfy_low - t, t - comfy_high))
     t_norm = (t_dist - t_dist.min()) / (t_dist.max() - t_dist.min() + eps)
 
-    h = df['kelembaban'].astype(float).values
+    h = df["kelembaban"].values
     hum_dist = np.maximum(0, np.maximum(40 - h, h - 70))
     h_norm = (hum_dist - hum_dist.min()) / (hum_dist.max() - hum_dist.min() + eps)
 
-    w = df['kecepatan_angin'].astype(float).values
+    w = df["kecepatan_angin"].values
     w_norm = (w - w.min()) / (w.max() - w.min() + eps)
 
-    composite = 0.35 * r_norm + 0.25 * t_norm + 0.2 * h_norm + 0.2 * w_norm
-    return np.clip(composite, 0, 1)
+    return 0.35*r_norm + 0.25*t_norm + 0.2*h_norm + 0.2*w_norm
 
-# ======================================================================
-#  DATA LOADING — WAJIB membaca data_yapen.xlsx
-# ======================================================================
 
-@st.cache_data(show_spinner=True)
-def load_data(local_path=LOCAL_XLSX_PATH):
-    try:
-        df = pd.read_excel(local_path, engine="openpyxl")
-        st.sidebar.success(f"Berhasil membaca file Excel: {local_path}")
-    except Exception as e:
-        st.error(f"❌ Gagal membaca file Excel `{local_path}`.\n\n**Kesalahan:** {e}")
-        st.stop()
+# ---------- LOAD DATA ----------
+@st.cache_data
+def load_data(path):
+    df = pd.read_excel(path, engine="openpyxl")
 
-    # Pastikan kolom wajib tersedia
+    # Normalisasi nama kolom
+    df.columns = df.columns.str.strip().str.lower()
+
+    # Alias untuk kompatibilitas
+    if "kecepatan_angin" not in df.columns:
+        if "kecepatan_angin" in df.columns:
+            df.rename(columns={"Kecepatan_angin": "kecepatan_angin"}, inplace=True)
+
     required_cols = [
-        "Tanggal", "curah_hujan", "Tn", "Tx", "Tavg",
-        "kelembaban", "matahari", "kecepatan_angin"
+        "tanggal", "tn", "tx", "tavg",
+        "kelembaban", "curah_hujan",
+        "matahari", "kecepatan_angin"
     ]
-    missing = [c for c in required_cols if c not in df.columns]
 
-    if missing:
-        st.error(f"❌ Kolom wajib berikut HILANG dari Excel kamu: {missing}")
-        st.stop()
+    for col in required_cols:
+        if col not in df.columns:
+            st.error(f"❌ Kolom '{col}' tidak ditemukan di Excel!")
+            st.stop()
 
-    # Convert tanggal
-    df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce")
-
-    # Pastikan numeric
-    for col in required_cols[1:]:
+    df["tanggal"] = pd.to_datetime(df["tanggal"], errors="coerce")
+    for col in ["tn", "tx", "tavg", "kelembaban", "curah_hujan", "matahari", "kecepatan_angin"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    df = df.sort_values("Tanggal").reset_index(drop=True)
-    return df
+    return df.sort_values("tanggal").reset_index(drop=True)
 
 
-# LOAD DATA
-data = load_data()
+# Load user excel file
+try:
+    data = load_data(LOCAL_XLSX_PATH)
+    st.sidebar.success("✔ Data Excel berhasil dimuat!")
+except Exception as e:
+    st.error(f"❌ Gagal membaca Excel: {e}")
+    st.stop()
 
-# ======================================================================
-#  SIDEBAR FILTERS
-# ======================================================================
 
+# ---------- SIDEBAR ----------
 st.sidebar.header("⚙️ Pengaturan")
-extreme_threshold = st.sidebar.number_input("Ambang Hujan Ekstrem (mm/hari)", value=50, min_value=1)
+extreme_threshold = st.sidebar.number_input("Ambang Hujan Ekstrem (mm)", value=50, min_value=1)
 risk_high = st.sidebar.slider("Ambang Risiko Tinggi", 0.0, 1.0, 0.6, 0.01)
 risk_med = st.sidebar.slider("Ambang Risiko Sedang", 0.0, 1.0, 0.3, 0.01)
-ma_window = st.sidebar.slider("Moving average window", 1, 60, 7)
+ma_window = st.sidebar.slider("Moving Average (hari)", 1, 60, 7)
 
-st.sidebar.header("📅 Filter data")
-min_date = data["Tanggal"].min().date()
-max_date = data["Tanggal"].max().date()
-date_range = st.sidebar.date_input("Rentang tanggal", (min_date, max_date))
+# Filter tanggal
+st.sidebar.header("📅 Filter Data")
+min_date = data["tanggal"].min().date()
+max_date = data["tanggal"].max().date()
+date_range = st.sidebar.date_input("Rentang Tanggal", (min_date, max_date))
 
-start_date, end_date = map(pd.to_datetime, date_range)
-mask = (data["Tanggal"] >= start_date) & (data["Tanggal"] <= end_date)
-df = data.loc[mask].copy()
+start, end = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+df = data[(data["tanggal"] >= start) & (data["tanggal"] <= end)].copy()
 
-if df.empty:
-    st.warning("Rentang tanggal tidak memiliki data")
-    df = data.copy()
 
-# ======================================================================
-#  DERIVED FIELDS
-# ======================================================================
-
-df["Prediksi Cuaca"] = df.apply(lambda r: klasifikasi_cuaca(r["curah_hujan"], r["matahari"]), axis=1)
-df["Hujan Ekstrem"] = df["curah_hujan"].apply(lambda x: "Ya" if x > extreme_threshold else "Tidak")
+# ---------- FEATURE ENGINEERING ----------
+df["prediksi_cuaca"] = df.apply(lambda r: klasifikasi_cuaca(r["curah_hujan"], r["matahari"]), axis=1)
+df["hujan_ekstrem"] = df["curah_hujan"].apply(lambda x: "Ya" if x > extreme_threshold else "Tidak")
 df["extreme_flag"] = df["curah_hujan"].apply(lambda x: hujan_ekstrem_flag(x, extreme_threshold))
+df["risk_score"] = df.apply(lambda r: risiko_kekeringan_score(r["curah_hujan"], r["matahari"]), axis=1)
+df["risk_label"] = df["risk_score"].apply(lambda s: risiko_kekeringan_label(s, (risk_high, risk_med)))
+df["weather_index"] = compute_weather_index(df)
+df["year"] = df["tanggal"].dt.year
+df["month"] = df["tanggal"].dt.month
 
-df["RiskScore"] = df.apply(lambda r: risiko_kekeringan_score(r["curah_hujan"], r["matahari"]), axis=1)
-df["RiskLabel"] = df["RiskScore"].apply(lambda s: risiko_kekeringan_label(s, (risk_high, risk_med)))
 
-df["WeatherIndex"] = compute_weather_index(df)
+# ---------- DASHBOARD ----------
+st.markdown("---")
+st.subheader("Ringkasan Data")
+c1, c2, c3 = st.columns(3)
+c1.metric("Avg Rainfall", f"{df['curah_hujan'].mean():.2f} mm")
+c2.metric("Avg Temperature", f"{df['tavg'].mean():.2f} °C")
+c3.metric("Avg Risk Score", f"{df['risk_score'].mean():.2f}")
 
-df["Year"] = df["Tanggal"].dt.year
-df["Month"] = df["Tanggal"].dt.month
+# ========== 1. CURAH HUJAN ==========
+st.header("1. Prediksi Curah Hujan")
+fig_rain = px.line(df, x="tanggal", y="curah_hujan")
+st.plotly_chart(fig_rain, use_container_width=True)
 
-# ======================================================================
-#  SEMUA BAGIAN LAIN (PLOT, METRICS, EXPORT)
-# ======================================================================
+# ========== 2. TEMPERATURE ==========
+st.header("2. Temperatur")
+fig_temp = px.line(df, x="tanggal", y=["tn", "tavg", "tx"])
+st.plotly_chart(fig_temp, use_container_width=True)
 
-# (SEMUA BAGIAN GRAFIK & ANALISIS TETAP SAMA DENGAN CODE KAMU)
-# Tidak saya ulangi karena TIDAK ADA YANG DIUBAH,
-# hanya bagian loader datanya saja.
+# ========== 3. RISIKO KEKERINGAN ==========
+st.header("3. Risiko Kekeringan")
+df["risk_ma"] = df["risk_score"].rolling(ma_window).mean()
+fig_risk = px.line(df, x="tanggal", y="risk_score")
+fig_risk.add_scatter(x=df["tanggal"], y=df["risk_ma"], mode="lines", name="Moving Average")
+st.plotly_chart(fig_risk, use_container_width=True)
 
-# ======================================================================
-#  EXPORT KE EXCEL
-# ======================================================================
+# ========== 4. HUJAN EKSTREM ==========
+st.header("4. Hujan Ekstrem")
+fig_extreme = px.scatter(df, x="tanggal", y="curah_hujan", color="hujan_ekstrem")
+st.plotly_chart(fig_extreme, use_container_width=True)
 
-with st.expander("📁 Lihat & Unduh Data Hasil"):
-    st.dataframe(df)
+# ========== 5. WEATHER INDEX ==========
+st.header("5. Weather Index")
+fig_index = px.line(df, x="tanggal", y="weather_index")
+st.plotly_chart(fig_index, use_container_width=True)
 
+# ========== EXPORT ==========
+st.markdown("---")
+with st.expander("📁 Unduh Data"):
     buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="DSS_Yapen")
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False)
 
     buffer.seek(0)
-
     st.download_button(
-        "Unduh Excel Hasil",
+        "Unduh Excel",
         buffer.getvalue(),
-        file_name="hasil_dss_iklim.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "hasil_dss_iklim.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+st.success("Dashboard siap digunakan dengan file data_yapen.xlsx ✔")
 
 
 

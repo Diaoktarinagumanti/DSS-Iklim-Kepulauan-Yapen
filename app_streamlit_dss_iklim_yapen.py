@@ -8,23 +8,17 @@ st.title("🌦️ Decision Support System Iklim - Kepulauan Yapen")
 st.markdown("Dashboard Prediksi Iklim berdasarkan data cuaca harian Kepulauan Yapen.")
 
 # =======================================================================
-#  BAGIAN 1 — Fungsi Bebas Dummy (WAJIB DATA KAMU)
+#  BAGIAN 1 — Load Data Excel (DATA ASLI KAMU)
 # =======================================================================
 
 def load_data():
-    """Membaca data CSV asli tanpa fallback ke dummy."""
-    data_path = "data_yapen.csv"
+    """Membaca file Excel asli tanpa fallback ke data dummy."""
+    data_path = "data_yapen.xlsx"
 
-    # Baca file CSV
     try:
-        df = pd.read_csv(
-            data_path,
-            encoding="utf-8",
-            sep=",",
-            on_bad_lines="skip"
-        )
+        df = pd.read_excel(data_path)
     except Exception as e:
-        st.error(f"❌ File CSV tidak dapat dibaca. Kesalahan: {e}")
+        st.error(f"❌ File Excel tidak dapat dibaca. Kesalahan: {e}")
         st.stop()
 
     # Validasi kolom wajib
@@ -44,11 +38,10 @@ def load_data():
         st.error(f"❌ Kolom berikut tidak ada di data kamu: {missing}")
         st.stop()
 
-    # Convert tanggal
+    # Konversi tanggal
     df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce")
 
     return df
-
 
 # =======================================================================
 #  BAGIAN 2 — Fungsi Analisis
@@ -75,7 +68,6 @@ def risiko_kekeringan(ch, matahari):
 def hujan_ekstrem(ch):
     return "Ya" if ch > 50 else "Tidak"
 
-
 # =======================================================================
 #  BAGIAN 3 — Load Data
 # =======================================================================
@@ -86,7 +78,6 @@ df = load_data()
 df["Prediksi Cuaca"] = df.apply(lambda r: klasifikasi_cuaca(r["curah_hujan"], r["matahari"]), axis=1)
 df["Risiko Kekeringan"] = df.apply(lambda r: risiko_kekeringan(r["curah_hujan"], r["matahari"]), axis=1)
 df["Hujan Ekstrem"] = df["curah_hujan"].apply(hujan_ekstrem)
-
 
 # =======================================================================
 #  BAGIAN 4 — Filter Tanggal
@@ -103,7 +94,7 @@ selected_date = st.sidebar.date_input(
 row = df[df["Tanggal"] == pd.to_datetime(selected_date)]
 
 # =======================================================================
-#  BAGIAN 5 — Tampilkan Informasi Harian
+#  BAGIAN 5 — Info Harian
 # =======================================================================
 
 if not row.empty:
@@ -124,9 +115,8 @@ if not row.empty:
 else:
     st.error("Data tidak ditemukan untuk tanggal tersebut.")
 
-
 # =======================================================================
-#  BAGIAN 6 — Grafik Utama
+#  BAGIAN 6 — Grafik
 # =======================================================================
 
 st.markdown("---")
@@ -142,14 +132,12 @@ with col2:
     fig_hujan = px.line(df, x="Tanggal", y="curah_hujan", title="Tren Curah Hujan Harian")
     st.plotly_chart(fig_hujan, use_container_width=True)
 
-
 # =======================================================================
 #  BAGIAN 7 — Tabel
 # =======================================================================
 
 with st.expander("📁 Lihat Data Lengkap"):
     st.dataframe(df)
-
 
 # =======================================================================
 #  BAGIAN 8 — Unduh Excel
@@ -159,6 +147,8 @@ st.markdown("⬇️ **Unduh Hasil Analisis:**")
 excel_path = "hasil_dss_iklim.xlsx"
 df.to_excel(excel_path, index=False)
 st.download_button("Download Excel", data=open(excel_path, "rb").read(), file_name=excel_path)
+
+
 
 
 
